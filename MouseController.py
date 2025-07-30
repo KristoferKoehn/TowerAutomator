@@ -1,5 +1,4 @@
 import ctypes
-import threading
 import time
 from ctypes import wintypes
 
@@ -13,6 +12,9 @@ MOUSEEVENTF_RIGHTDOWN = 0x0008
 MOUSEEVENTF_RIGHTUP = 0x0010
 MOUSEEVENTF_MIDDLEDOWN = 0x0020
 MOUSEEVENTF_MIDDLEUP = 0x0040
+VK_LBUTTON = 0x01
+VK_RBUTTON = 0x02
+VK_DOWN = 0x28
 
 # Map from button name to event flags
 BUTTON_DOWN = {
@@ -45,28 +47,41 @@ class INPUT(ctypes.Structure):
 SendInput = ctypes.windll.user32.SendInput
 GetSystemMetrics = ctypes.windll.user32.GetSystemMetrics
 
+def _send_input(mi: MOUSEINPUT):
+    inp = INPUT(type=INPUT_MOUSE, mi=mi)
+    SendInput(1, ctypes.byref(inp), ctypes.sizeof(inp))
+
+def is_mouse_button_pressed() -> bool:
+    return (
+        ctypes.windll.user32.GetAsyncKeyState(VK_LBUTTON) & 0x8000
+        or ctypes.windll.user32.GetAsyncKeyState(VK_RBUTTON) & 0x8000
+    )
+
 class MouseController:
+    _instance = None
 
-    mouse_lock = False
-    prev_mouse_position = (0,0)
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super(MouseController, cls).__new__(cls)
+            cls._instance._init_once()
+        return cls._instance
 
-    def __init__(self):
+    def _init_once(self):
+        self.mouse_lock = False
+        self.prev_mouse_position = (0, 0)
         self.screen_width = GetSystemMetrics(0)
         self.screen_height = GetSystemMetrics(1)
         self.user32 = ctypes.WinDLL("user32", use_last_error=True)
 
     def get_mouse_lock(self) -> bool:
-        if self.prev_mouse_position != self.get_mouse_lock():
+        if self.prev_mouse_position != self.get_mouse_position():
+            return True
+        elif is_mouse_button_pressed():
             return True
         else:
             return self.mouse_lock
 
-    def _send_input(self, mi: MOUSEINPUT):
-        inp = INPUT(type=INPUT_MOUSE, mi=mi)
-        SendInput(1, ctypes.byref(inp), ctypes.sizeof(inp))
-
     def _normalize(self, x, y):
-        # Convert to 65535-based absolute coordinates
         norm_x = int(x * 65535 / self.screen_width)
         norm_y = int(y * 65535 / self.screen_height)
         return norm_x, norm_y
@@ -79,7 +94,7 @@ class MouseController:
                         dwFlags=MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE,
                         time=0,
                         dwExtraInfo=None)
-        self._send_input(mi)
+        _send_input(mi)
         self.mouse_lock = False
 
     def press(self, button='left'):
@@ -88,7 +103,7 @@ class MouseController:
                         dwFlags=BUTTON_DOWN[button],
                         time=0,
                         dwExtraInfo=None)
-        self._send_input(mi)
+        _send_input(mi)
 
     def release(self, button='left'):
         mi = MOUSEINPUT(dx=0, dy=0,
@@ -96,7 +111,7 @@ class MouseController:
                         dwFlags=BUTTON_UP[button],
                         time=0,
                         dwExtraInfo=None)
-        self._send_input(mi)
+        _send_input(mi)
 
     def click(self, button='left'):
         self.mouse_lock = True
@@ -129,13 +144,19 @@ class MouseController:
             raise ctypes.WinError(ctypes.get_last_error())
         return pt.x, pt.y
 
-    def click_return(self, x, y, button = 'left'):
+    def click_return(self, x, y, button='left'):
         self.mouse_lock = True
         pos = self.get_mouse_position()
         self.move_to(x, y)
+        time.sleep(0.05)
         self.click(button)
-        self.move_to(pos[0], pos[1])
+        self.move_to(*pos)
         self.mouse_lock = False
 
     def update_mouse_position(self):
-        prev_mouse_pos = self.get_mouse_position()
+        self.prev_mouse_position = self.get_mouse_position()
+
+# Global accessor
+def get_mouse_controller() -> MouseController:
+    return MouseController()
+
