@@ -3,16 +3,18 @@ import threading
 import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from difflib import get_close_matches
 from enum import Enum
 
 import cv2
 import numpy as np
 
+import MouseController
 from MouseController import get_mouse_controller
 from TemporalValueNormalizer import TemporalValueNormalizer
 from debug_draw_manager import debug_draw_manager
 from debug_logging_manager import get_debug_logger
-from kutils import load_templates, find_button_center, window, Menu, load_image_from_path
+from kutils import load_templates, find_button_center, window, Menu, load_image_from_path, clean_ocr_string
 from ocr_worker import ocr_pool
 from tracker.strategy_base import SubStrategy
 from PIL import Image
@@ -41,24 +43,31 @@ class UpgradeSearcherStrategy(SubStrategy):
 
     current_menu = Menu.ATTACK
 
-    rejected_names = ["RapidChance(Fire", "DamageThorn",
-                      "LandDamageMine", "LandChanceMine",
-                      "LandNineChance", "LandnineChance",
-                      "RapidDurationFire", "RapidChanceFire"
-                                           "LandRadiusMine", "AttackUpgradeFree",
-                      "LandNineRadius", "LandNineDamage",
-                      "naxRecovery", "CoinsKcillBonus",
-                      "CoinsJave", "Defense00", "DefenseOO"
-                                                "InterestJave", "cashBonus", "cashlave",
-                      "cashlave", "RecoveryMax", "CoinsBonusKill",
-                      "ShockiaveSize", "BounceShotchance",
-                      "AttackUpgradeFree=", "Packagechance"
-                                            "nultishotChance", "nultishotTargets",
-                      "nhultishotTargets", "BounceShot;Targets"
-                                           "RapidChanceFire:", "Rapid[ChanceFire",
-                      "Aosolute", "Kegen"
-                      ]
+    rejected_names = [
+        "RAPIDCHANCEFIRE", "DAMAGETHORN", "LANDDAMAGEMINE", "LANDCHANCEMINE",
+        "LANDNINECHANCE", "RAPIDDURATIONFIRE", "LANDRADIUSMINE",  "COINSJAVE",
+        "LANDNINERADIUS", "LANDNINEDAMAGE", "NAXRECOVERY", "COINSKCILLBONUS",
+        "INTERESTJAVE", "CASHBONUS", "CASHLAVE", "RECOVERYMAX", "DEFENSE00",
+        "COINSBONUSKILL", "SHOCKIAVESIZE", "BOUNCESHOTCHANCE", "ATTACKUPGRADEFREE",
+        "PACKAGECHANCE", "NULTISHOTCHANCE", "NULTISHOTTARGETS", "NHULTISHOTTARGETS",
+        "BOUNCESHOTTARGETS","AOSOLUTE", "KEGEN", "DEFENSEOO", "RORCE", "FORCE", "None",
+        "SHECKWZVESIZE", "SHECKWZVEFREQUENCY", "SHOCKWAVEFREQUETCY", "SHECKWAVESIZE", "INTERESTWEAVE",
+        "FREEUTILITYUPGRZDE" "TCRITICALFACTOR", "IVAXRECOVERY", "HEAITH", "ABSOLUTE" "MMAXRECOVERY",
+        "DEFENSEABSOIUTE", "ABSOLUTE", "SHOCKIVAVE"
+    ]
 
+    # Normalized target names for fuzzy matching
+    normalized_upgrade_names = [
+        "DAMAGE", "ATTACKSPEED", "CRITICALCHANCE", "CRITICALFACTOR", "RANGE", "DAMAGEPERMETER",
+        "MULTISHOTCHANCE", "MULTISHOTTARGETS", "RAPIDFIRECHANCE", "RAPIDFIREDURATION", "BOUNCESHOTCHANCE",
+        "BOUNCESHOTTARGETS", "BOUNCESHOTRANGE", "SUPERCRITCHANCE", "SUPERCRITMULT", "RENDARMORCHANCE",
+        "RENDARMORMULT", "HEALTH", "HEALTHREGEN", "DEFENSE", "DEFENSEABSOLUTE", "THORNDAMAGE", "LIFESTEAL",
+        "KNOCKBACKCHANCE", "KNOCKBACKFORCE", "ORBSPEED", "ORBS", "SHOCKWAVESIZE", "SHOCKWAVEFREQUENCY",
+        "LANDMINECHANCE", "LANDMINEDAMAGE", "LANDMINERADIUS", "DEATHDEFY", "WALLHEALTH", "WALLREBUILD",
+        "CASHBONUS", "CASHWAVE", "COINSKILLBONUS", "COINSWAVE", "FREEATTACKUPGRADE", "FREEDEFENSEUPGRADE",
+        "FREEUTILITYUPGRADE", "INTERESTWAVE", "RECOVERYAMOUNT", "MAXRECOVERY", "PACKAGECHANCE",
+        "ENEMYATTACKLEVELSKIP", "ENEMYHEALTHLEVELSKIP"
+    ]
 
     current_resources_detected = ("", "", "")
 
@@ -71,19 +80,30 @@ class UpgradeSearcherStrategy(SubStrategy):
 
     def __init__(self):
         self.screenshot = None
-
         self._stop_threads = threading.Event()
         self._stop_threads.set()
         self.upgrade_thread = threading.Thread(target=self.upgrade_detection_worker, daemon=True).start()
         self.resource_thread = threading.Thread(target=self.resource_detection_worker, daemon=True).start()
-
         self.menu_upgrade_lockout_timer = time.time() + 2.0
+
+        self.scroll_timer = time.time()
+        self.scroll_count = 0
+        self.swap_menu_flag = False
+        self.delay_timer_started_at = 0
+        self.delayed_upgrade_check_pending = False
+        self.wander_timer = time.time()
+
 
     def on_enter(self):
         get_debug_logger().log_with_spinner_until("[🛠️ UpgradeSearcher] Ready to search.")
         get_debug_logger().log_with_spinner_until("upgrade data thread started")
-        self.menu_upgrade_lockout_timer = time.time() + 2
+        self.menu_upgrade_lockout_timer = time.time() + 1.5
         self._stop_threads.clear()
+        self.scroll_count = 0
+        self.tracked_upgrades = {}
+        self.delay_timer_started_at = 0
+        self.delayed_upgrade_check_pending = False
+        self.wander_timer = time.time()
 
 
     def on_exit(self):
@@ -91,7 +111,9 @@ class UpgradeSearcherStrategy(SubStrategy):
         self._stop_threads.set()
 
 
+    ### MAIN RUN FUNCTION!!! =================
     frame_count = 0
+
     def run(self, screenshot: Image.Image):
         dlm = get_debug_logger()
 
@@ -109,10 +131,8 @@ class UpgradeSearcherStrategy(SubStrategy):
         lowest_cost = float("inf")
         for k, v in self.tracked_upgrades.items():
             cost_val = v[1]
-
             if cost_val is None or cost_val == "MAX":
                 continue
-
             try:
                 cost_float = float(cost_val)
 
@@ -123,7 +143,7 @@ class UpgradeSearcherStrategy(SubStrategy):
             except (ValueError, TypeError):
                 get_debug_logger().log_with_spinner_until(f"Invalid cost value for {k}: {cost_val}")
 
-        dlm.lowest_cost = self.lowest_known_cost_item
+        dlm.lowest_cost_upgrade = self.lowest_known_cost_item
 
         prev_menu = self.current_menu
         # detect menu state
@@ -140,20 +160,77 @@ class UpgradeSearcherStrategy(SubStrategy):
         if utility_menu:
             self.current_menu = Menu.UTILITY
 
-        dlm.current_menu = self.current_menu
+        dlm.current_upgrade_menu = self.current_menu
         dlm.current_upgrades_detected = self.latest_upgrades_detected
+        dlm.tracked_upgrades = self.tracked_upgrades
 
         if prev_menu != self.current_menu:
             self.menu_upgrade_lockout_timer = time.time()
 
-        if time.time() - self.menu_upgrade_lockout_timer > 1:
+        if time.time() - self.menu_upgrade_lockout_timer > 0.7:
             self.update_visible_upgrades()
         else:
             self.clear_visible_upgrades()
 
+        with self.result_lock:
+            if len(self.latest_upgrades_detected) == 0:
+                self.scroll_timer = time.time()
+
         self.frame_count += 1
         if self.frame_count > 100 == 0:
             self.frame_count = 0
+
+        with self.result_lock:
+            if time.time() - self.wander_timer > 85:
+                matched_upgrade = None
+                for upgrade in self.latest_upgrades_detected:
+                    try:
+                        raw_name = upgrade[0]
+                        if raw_name:
+                            cleaned_name = self.match_upgrade_name(raw_name)
+                            if cleaned_name == self.lowest_known_cost_item:
+                                matched_upgrade = upgrade
+                                break
+                    except (IndexError, TypeError):
+                        continue  # Skip malformed entries
+
+                # Check if lowest upgrade is still on screen
+                if matched_upgrade:
+                    if not self.delayed_upgrade_check_pending:
+                        self.delay_timer_started_at = time.time()
+                        self.delayed_upgrade_check_pending = True
+                    elif time.time() - self.delay_timer_started_at >= 0.25:
+                        # After half a second, re-check its presence
+                        if matched_upgrade:
+                            self.delay_timer_started_at = time.time() - 0.3 #hopefully stop the spam? or maybe this is fine..
+                            MouseController.touch_position(matched_upgrade[3][0],matched_upgrade[3][1])
+                            return ## exit to prevent scrolling or something
+                        else:
+                            self.delayed_upgrade_check_pending = False
+                else:
+                    self.delayed_upgrade_check_pending = False
+
+        # Movement logic proceeds as normal after delay
+        if time.time() - self.scroll_timer > 2.5 and self.scroll_count < 6:
+            self.scroll_down()
+            self.scroll_timer = time.time()
+            self.scroll_count += 1
+        elif time.time() - self.scroll_timer > 2.5 and self.scroll_count >= 6:
+            self.scroll_up()
+            self.scroll_count = 0
+            self.scroll_timer = time.time()
+            self.swap_menu_flag = True
+
+        if time.time() - self.wander_timer < 100:
+            if time.time() - self.scroll_timer > 2 and self.swap_menu_flag:
+                self.swap_menu_flag = False
+                self.switch_menus()
+        else:
+            if time.time() - self.scroll_timer > 2 and self.swap_menu_flag:
+                self.swap_menu_flag = False
+                self.switch_menu_to(self.tracked_upgrades[self.lowest_known_cost_item][2])
+                self.scroll_timer = time.time() # give it a little pause so it can see the stuff at the top of the list
+
 
     def upgrade_detection_worker(self):
         while True:
@@ -197,56 +274,68 @@ class UpgradeSearcherStrategy(SubStrategy):
     def update_visible_upgrades(self):
         with self.resource_lock:
             for name, value, cost, position in self.latest_upgrades_detected:
-                if len(name) > 0:
-                    n = name.replace(' ', '').replace('/', '').replace(':', '').replace('[', '')
-                    if n not in self.rejected_names:
-                        self.tracked_upgrades[n] = (value, normalize_cost_value(cost), self.current_menu)
+                if len(name) > 0 and name is not None:
+                    name = self.match_upgrade_name(name)
+                    if name is not None:
+                        self.tracked_upgrades[name] = (value, normalize_cost_value(cost), self.current_menu)
 
     def switch_menus(self):
         match self.current_menu:
             case Menu.ATTACK:
                 menu = find_button_center(self.screenshot, self.defense_button_template,"defense_menu")
                 if menu:
-                    abs_x = window.left + menu[0]
-                    abs_y = window.top + menu[1]
-                    get_mouse_controller().click_return(abs_x, abs_y)
+                    MouseController.touch_position(menu[0], menu[1])
             case Menu.DEFENSE:
                 menu = find_button_center(self.screenshot, self.utility_button_template, "utility_menu")
                 if menu:
-                    abs_x = window.left + menu[0]
-                    abs_y = window.top + menu[1]
-                    get_mouse_controller().click_return(abs_x, abs_y)
+                    MouseController.touch_position(menu[0], menu[1])
             case Menu.UTILITY:
                 menu = find_button_center(self.screenshot, self.attack_button_template, "attack_menu")
                 if menu:
-                    abs_x = window.left + menu[0]
-                    abs_y = window.top + menu[1]
-                    get_mouse_controller().click_return(abs_x, abs_y)
+                    MouseController.touch_position(menu[0], menu[1])
 
     def switch_menu_to(self, target_menu):
         if self.current_menu == target_menu:
             return
-
         match target_menu:
             case Menu.ATTACK:
                 menu = find_button_center(self.screenshot, self.attack_button_template, "attack_menu")
                 if menu:
-                    abs_x = window.left + menu[0]
-                    abs_y = window.top + menu[1]
-                    get_mouse_controller().click_return(abs_x, abs_y)
+                    MouseController.touch_position(menu[0], menu[1])
             case Menu.DEFENSE:
                 menu = find_button_center(self.screenshot, self.defense_button_template, "defense_menu")
                 if menu:
-                    abs_x = window.left + menu[0]
-                    abs_y = window.top + menu[1]
-                    get_mouse_controller().click_return(abs_x, abs_y)
+                    MouseController.touch_position(menu[0], menu[1])
             case Menu.UTILITY:
                 menu = find_button_center(self.screenshot, self.utility_button_template, "utility_menu")
                 if menu:
-                    abs_x = window.left + menu[0]
-                    abs_y = window.top + menu[1]
-                    get_mouse_controller().click_return(abs_x, abs_y)
+                    MouseController.touch_position(menu[0], menu[1])
 
+    def scroll_down(self):
+        #new resolution, each upgrade tile is 88pixels tall
+        h, w = self.screenshot.shape[:2]
+        #MouseController.swipe(w//2, int(h * .8), w//2, int(h * .8) - 88, 1100)
+        MouseController.drag(w//2, int(h * .85), w//2, int(h * .85) - 93, 800)
+
+    def scroll_up(self):
+        # new resolution, each upgrade tile is 88pixels tall
+        h, w = self.screenshot.shape[:2]
+        MouseController.swipe(w // 2, int(h * .72), w // 2, int(h * .75) + 230, 300)
+
+
+    def match_upgrade_name(self, ocr_string: str, cutoff=0.8) -> str | None:
+        """
+        Returns the best-matched upgrade name from normalized list using fast fuzzy matching.
+        :param ocr_string: Raw string from OCR.
+        :param cutoff: Similarity threshold (0.0–1.0), higher means stricter match.
+        :return: Cleaned and matched upgrade name, or None if not found.
+        """
+        cleaned = clean_ocr_string(ocr_string, self.rejected_names)
+        if cleaned is not None:
+            matches = get_close_matches(cleaned, self.normalized_upgrade_names, n=1, cutoff=cutoff)
+            return matches[0] if matches else None
+        else:
+            return None
 
 def resource_info(image):
     crop_x, crop_y = 36, 52  # top-left corner of the crop

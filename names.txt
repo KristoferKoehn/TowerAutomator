@@ -1,0 +1,1 @@
+Damage • Attack Speed • Critical Chance • Critical Factor • Range • Damage Per Meter • Multishot Chance • Multishot Targets • Rapid Fire Chance • Rapid Fire Duration • Bounce Shot Chance • Bounce Shot Targets • Bounce Shot Range • Super Crit Chance • Super Crit Mult • Rend Armor Chance • Rend Armor Mult

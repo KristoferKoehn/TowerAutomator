@@ -2,6 +2,8 @@ import ctypes
 import time
 from ctypes import wintypes
 
+import kutils
+
 # Constants
 INPUT_MOUSE = 0
 MOUSEEVENTF_MOVE = 0x0001
@@ -55,6 +57,33 @@ def is_mouse_button_pressed() -> bool:
     return (
         ctypes.windll.user32.GetAsyncKeyState(VK_LBUTTON) & 0x8000
         or ctypes.windll.user32.GetAsyncKeyState(VK_RBUTTON) & 0x8000
+    )
+
+
+def touch_position(x, y):
+    _x, _y = kutils.transform_point_between_resolutions((x, y))
+    kutils.run_shell_command(
+        kutils.adb_dir,
+        'shell',
+        f'input -d {kutils.display_id} tap {_x} {_y}', on_output=kutils.handle_output,
+    )
+
+def swipe(x1, y1, x2, y2, duration):
+    _x1, _y1 = kutils.transform_point_between_resolutions((x1, y1))
+    _x2, _y2 = kutils.transform_point_between_resolutions((x2, y2))
+    kutils.run_shell_command(
+        kutils.adb_dir,
+        'shell',
+        f'input -d {kutils.display_id} swipe {_x1} {_y1} {_x2} {_y2} {duration}'
+    )
+
+def drag(x1, y1, x2, y2, duration):
+    _x1, _y1 = kutils.transform_point_between_resolutions((x1, y1))
+    _x2, _y2 = kutils.transform_point_between_resolutions((x2, y2))
+    kutils.run_shell_command(
+        kutils.adb_dir,
+        'shell',
+        f'input -d {kutils.display_id} draganddrop {_x1} {_y1} {_x2} {_y2} {duration}'
     )
 
 class MouseController:
@@ -155,6 +184,7 @@ class MouseController:
 
     def update_mouse_position(self):
         self.prev_mouse_position = self.get_mouse_position()
+
 
 # Global accessor
 def get_mouse_controller() -> MouseController:

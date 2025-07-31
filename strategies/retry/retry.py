@@ -37,8 +37,6 @@ class RetryStrategy(ActiveStateStrategy):
     def run(self, screenshot: Image.Image):
         retry = find_button_center(screenshot, self.retry_button_template, button_name="gameplay", threshold=0.6)
         if retry:
-            abs_x = window.left + retry[0]
-            abs_y = window.top + retry[1]
-            get_mouse_controller().click_return(abs_x, abs_y)
+            MouseController.touch_position(retry[0], retry[1])
             get_debug_logger().click_counts["Retry"] = (get_debug_logger().click_counts["Retry"][0] + 1, time.time())
             time.sleep(0.5)

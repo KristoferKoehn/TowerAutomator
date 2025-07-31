@@ -93,7 +93,7 @@ class DebugDrawManager:
         crop_top = int(height * 0.04)
         img_cropped = image.crop((0, crop_top, width, height))
 
-        debug_border_width = 300
+        debug_border_width = 350
         new_width = width + debug_border_width
         new_height = height - crop_top
 

@@ -1,6 +1,10 @@
 import os
 import glob
+import platform
+import re
 import subprocess
+import threading
+import time
 from enum import Enum
 import cv2
 import pygetwindow as gw
@@ -133,34 +137,133 @@ def get_game_window(title_contains="The Tower"):
     print("Finding Phone Link Window...")
     windows = gw.getWindowsWithTitle(title_contains)
     if len(windows) == 0:
-        print("The Tower not found, searching Samsung Flow...")
-
-        windows = gw.getWindowsWithTitle("SM-S928U")
-        if len(windows) == 0:
-            print("No Samsung Flow window found.")
-            return None
-
-
-        return windows[0]
-
+        print("The Tower not found")
     if windows[0] is not None:
-        print("Found Phone Link Window!")
+        print("Found Window!")
 
     return windows[0] if windows else None
 
-def run_adb_shell_command(command):
-    try:
-        process = subprocess.run(['adb', 'shell', command], capture_output=True, text=True, check=True)
-        return process.stdout.strip()
-    except subprocess.CalledProcessError as e:
-        return f"Error: {e}\n{e.stderr}"
 
-def run_scrcpy_shell_command(command):
-    try:
-        process = subprocess.run(['scrcpy', command], capture_output=True, text=True, check=True)
-        return process.stdout.strip()
-    except subprocess.CalledProcessError as e:
-        return f"Error: {e}\n{e.stderr}"
+def clean_ocr_string(text: str, ignore_list: set[str]) -> str | None:
+    # Remove all non-alphanumeric characters
+    cleaned = re.sub(r'[^a-zA-Z0-9]', '', text).upper()
 
+    if not cleaned or cleaned in ignore_list:
+        return None
+
+    return cleaned
+
+
+def find_executable_by_name(executable_name, directory, recursive=True):
+    if not os.path.isdir(directory):
+        raise ValueError(f"Invalid directory: {directory}")
+
+    # Add platform-specific extension if missing (Windows)
+    possible_names = [executable_name]
+    if platform.system() == "Windows" and not executable_name.lower().endswith(('.exe', '.bat', '.cmd', '.com')):
+        possible_names = [f"{executable_name}{ext}" for ext in ['.exe', '.bat', '.cmd', '.com']]
+
+    for root, _, files in os.walk(directory) if recursive else [(directory, [], os.listdir(directory))]:
+        for file in files:
+            if file in possible_names:
+                full_path = os.path.join(root, file)
+                if is_executable(full_path):
+                    full_path = full_path.replace(".exe", "")
+                    return full_path
+
+    return None
+
+def is_executable(path):
+    if not os.path.isfile(path):
+        return False
+
+    if platform.system() == "Windows":
+        return path.lower().endswith(('.exe', '.bat', '.cmd', '.com'))
+    else:
+        return os.access(path, os.X_OK) and not os.path.isdir(path)
+
+adb_dir = find_executable_by_name("adb.exe", "external_programs")
+scrcpy_dir = find_executable_by_name("scrcpy.exe", "external_programs")
+display_id = 99999999
+
+def get_id_from_output(line):
+    global display_id
+    if extract_display_id(line) is not None:
+        display_id = extract_display_id(line)
+        print(f"Display id=({display_id})")
+
+
+def handle_output(line):
+    if line is not None:
+        print(f"-> {line}")
+
+def extract_display_id(log_line: str) -> int | None:
+    """Extracts the ID number from a log line like: '[server] INFO: New display: 1440x3120/600 (id=16)'"""
+    match = re.search(r'\(id=(\d+)\)', log_line)
+    if match:
+        return int(match.group(1))
+    else:
+        match = re.search(r'--display-id=(\d+)', log_line)
+        if match:
+            return int(match.group(1))
+    return None
+
+def transform_point_between_resolutions(
+    point: tuple[int, int],
+    from_resolution: tuple[int, int] = (474,1039),
+    to_resolution: tuple[int, int] = (1440,3120)
+) -> tuple[int, int]:
+    """Transforms a point from one resolution to another, preserving relative position."""
+    x, y = point
+    from_w, from_h = from_resolution
+    to_w, to_h = to_resolution
+
+    scale_x = to_w / from_w
+    scale_y = to_h / from_h
+
+    new_x = int(x * scale_x)
+    new_y = int(y * scale_y)
+
+    return new_x, new_y
+
+def run_shell_command(program_dir, *args, on_output=handle_output, debug=False):
+    command = [program_dir] + list(args)
+    process = subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1
+    )
+
+    def read_output(_process=process):
+        for line in _process.stdout:
+            if on_output:
+                on_output(line.rstrip())
+
+    if debug:
+        print("[DEBUG] Running shell command: " + " ".join(command))
+    thread = threading.Thread(target=read_output, daemon=True)
+    thread.start()
+    return process  # You can terminate it later if needed
 
 window = get_game_window()
+
+if window is None:
+    test = run_shell_command(
+        scrcpy_dir,
+        '--new-display',
+        '--no-vd-system-decorations',
+        '--start-app=com.TechTreeGames.TheTower',
+        '--window-title=The Tower, Automator',
+        '--always-on-top',
+        on_output=get_id_from_output
+    )
+else:
+    print("running on --list-displays")
+    test = run_shell_command(scrcpy_dir,'--list-displays',on_output=get_id_from_output)
+
+time.sleep(2)
+
+
+
