@@ -1,5 +1,5 @@
 # TowerAutomator
-an automation script to farm resources on The Tower mobile game
+an automation script to farm resources on The Tower mobile game, so you can play the game as a true idler.
 
 This project uses Android Debug Bridge with scrcpy to handle screen mirroring to desktop and touch input commands.
 
@@ -8,14 +8,13 @@ Screen detection is done with cv2 template searching and easyOCR Optical Charact
 Requires android device and (so far) USB-C wired connection, probably 3.0+ data speeds.
 
 Steps to operate:
-load project in IDE (for now), import packages
-On android device, turn on developer mode
-set up USB debug on android device, turn on "always on" screen option
-download scrcpy (https://github.com/Genymobile/scrcpy) and place extracted directory in /external_programs
-open terminal in scrcpy directory, use this command: ./scrcpy --new-display --no-vd-system-decorations --start-app=com.TechTreeGames.TheTower --window-title="The Tower, Automator" --always-on-top
-maximise the window, then press alt-w to get window to correct resolution
-run the python project and start a round!
-
+1. load project in IDE (for now), import packages
+2. On android device, turn on developer mode
+3. set up USB debug on android device, turn on "always on" screen option
+4. download scrcpy (https://github.com/Genymobile/scrcpy) and place extracted directory in /external_programs
+5. open terminal in scrcpy directory, use this command: ./scrcpy --new-display --no-vd-system-decorations --start-app=com.TechTreeGames.TheTower --window-title="The Tower, Automator" --always-on-top
+6. maximise the window, then press alt-w to get window to correct resolution
+7. run the python project and start a round, enjoy the much more idle gameplay
 
 https://github.com/user-attachments/assets/5a0e8387-374f-4b74-bb38-f3c2de20f8fc
 
