@@ -32,6 +32,8 @@ from tracker.menu_tracker import MenuTracker
 debug_img = None
 main_img = None
 
+
+# ./scrcpy --new-display --no-vd-system-decorations --start-app=com.TechTreeGames.TheTower --window-title="The Tower, Automator" --always-on-top
 def memory_logger(interval_seconds=30, trace_top=5):
     pid = os.getpid()
     process = psutil.Process(pid)
