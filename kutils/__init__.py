@@ -8,7 +8,7 @@ import time
 from enum import Enum
 import cv2
 import pygetwindow as gw
-from debug_draw_manager import debug_draw_manager
+
 
 class Menu(Enum):
     ATTACK = "Attack"
@@ -41,9 +41,12 @@ def find_button_center(image, template, button_name, debug=True, threshold=0.7):
             def draw(debug_image, x=max_loc[0], y=max_loc[1], _w=w, _h=h):
                 cv2.rectangle(debug_image, (x, y), (x + _w, y + _h), (0, 0, 255), 2)
                 cv2.putText(debug_image, f"{button_name} {max_val:.3f}", (x, y + 12), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1)
+
+            from debug_draw_manager import debug_draw_manager
             debug_draw_manager.set_draw(button_name, draw)
         return center_x, center_y
     else:
+        from debug_draw_manager import debug_draw_manager
         debug_draw_manager.clear_debug_draw(button_name)
         return None
 
@@ -109,6 +112,7 @@ def best_button_from_templates(image, templates, threshold=0.650, identifier="")
             )
             cv2.circle(debug_image, c_center, c_radius, c_color, c_thickness)
 
+        from debug_draw_manager import debug_draw_manager
         debug_draw_manager.set_draw(identifier, draw)
 
     if best_match and best_score >= threshold:
@@ -138,6 +142,7 @@ def get_game_window(title_contains="The Tower"):
     windows = gw.getWindowsWithTitle(title_contains)
     if len(windows) == 0:
         print("The Tower not found")
+        return None
     if windows[0] is not None:
         print("Found Window!")
 
@@ -250,6 +255,7 @@ def run_shell_command(program_dir, *args, on_output=handle_output, debug=False):
 window = get_game_window()
 
 if window is None:
+    # ./scrcpy --new-display --no-vd-system-decorations --start-app=com.TechTreeGames.TheTower --window-title="The Tower, Automator" --always-on-top
     test = run_shell_command(
         scrcpy_dir,
         '--new-display',
@@ -260,10 +266,10 @@ if window is None:
         on_output=get_id_from_output
     )
 else:
-    print("running on --list-displays")
+    print("running on ")
     test = run_shell_command(scrcpy_dir,'--list-displays',on_output=get_id_from_output)
 
 time.sleep(2)
-
+window = get_game_window()
 
 

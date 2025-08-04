@@ -10,6 +10,21 @@ from MouseController import get_mouse_controller
 import kutils
 
 
+def get_menu_color(menu):
+    CYAN = (255, 255, 0)
+    PINK = (128, 128, 255)
+    YELLOW = (0, 255, 255)
+
+    match menu:
+        case kutils.Menu.ATTACK:
+            return CYAN
+        case kutils.Menu.DEFENSE:
+            return PINK
+        case kutils.Menu.UTILITY:
+            return YELLOW
+    return None
+
+
 class DebugDrawManager:
     _instance = None
     _lock = threading.Lock()
@@ -87,7 +102,7 @@ class DebugDrawManager:
         debug_draw_manager.render_debug_draw(image)
 
         image = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
-        debug_output_position = (0, 20)
+        debug_output_position = (0, 14)
 
         width, height = image.size
         crop_top = int(height * 0.04)
@@ -115,7 +130,6 @@ class DebugDrawManager:
         input_block = get_mouse_controller().get_mouse_lock()
 
         lines = [
-            line(f"input block: {input_block}", RED if input_block else GREEN),
             line(f"Uptime: {time.time() - dlm.start_time:.2f}", RED),
             line(f"resolution (463x1032): {image.size[0]}x{image.size[1]}"),
             line(f"memory: {rss_mb:.3f} MB"),
@@ -142,17 +156,10 @@ class DebugDrawManager:
         lines.append(line(""))
 
         lines.append(line("=== Upgrade Strategy Data ===", YELLOW))
-        m = (0, 0, 0)
-        match dlm.current_upgrade_menu:
-            case kutils.Menu.ATTACK:
-                m = CYAN
-            case kutils.Menu.DEFENSE:
-                m = PINK
-            case kutils.Menu.UTILITY:
-                m = YELLOW
-
-        lines.append(line(f"current upgrade menu: {dlm.current_upgrade_menu}", m))
+        t = time.time() - dlm.demon_mode_timer
+        lines.append(line(f"current upgrade menu: {dlm.current_upgrade_menu}", get_menu_color(dlm.current_upgrade_menu)))
         lines.append(line(f"cheapest upgrade: {dlm.lowest_cost_upgrade}"))
+        lines.append(line(f"Demon mode: {t:.1f}: {dlm.demon_mode_flag}", RED if dlm.demon_mode_flag else GREEN))
 
         lines.append(line(""))
         lines.append(line("=== visible upgrades ===", YELLOW))
@@ -167,14 +174,14 @@ class DebugDrawManager:
 
         lines.append(line("=== total upgrades ===", YELLOW))
         for key, value in dlm.tracked_upgrades.items():
-            lines.append(line(f"{key}: {value}"))
+            lines.append(line(f"{key}: ({value[0]}, {value[1]})", get_menu_color(value[2])))
 
         debug_draw_manager.clear_contains("_hud_debug")
-        line_size = 14
+        line_size = 13
         x, y = debug_output_position
         for i, (text, color) in enumerate(lines):
             def draw_line(debug_image, _text=text, _pos=(x, y + i * line_size), col=color):
-                cv2.putText(debug_image, _text, _pos, cv2.FONT_HERSHEY_SIMPLEX, 0.45, col, 1)
+                cv2.putText(debug_image, _text, _pos, cv2.FONT_HERSHEY_SIMPLEX, 0.35, col, 1)
 
             debug_draw_manager.set_draw(f"_hud_debug_{i}", draw_line)
 

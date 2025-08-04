@@ -18,6 +18,7 @@ class DebugLogger:
     tracked_upgrades = {}
     lowest_cost_upgrade = ""
 
+
     def __new__(cls):
         with cls._lock:
             if cls._instance is None:
@@ -32,15 +33,19 @@ class DebugLogger:
         self.spinner_active = False
         self.spinner_thread = None
         self._stop_spinner_event = threading.Event()
+        #  "Open": (0, 0.0),
+        #   "Battle": (0, 0.0),
         self.click_counts = {
             "Claim": (0, 0.0),
             "Retry": (0, 0.0),
             "Sigil": (0, 0.0),
-            "Open": (0, 0.0),
-            "Battle": (0, 0.0),
+
             "Resume": (0, 0.0),
         }
         self.start_time = 0
+
+        self.demon_mode_timer = 0
+        self.demon_mode_flag = False
 
     def log(self, message: str):
         """Print a one-time debug message."""

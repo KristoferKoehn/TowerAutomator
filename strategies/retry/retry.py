@@ -1,4 +1,8 @@
+import os
 import time
+from datetime import datetime
+
+import cv2
 
 import MouseController
 from MouseController import get_mouse_controller
@@ -35,6 +39,9 @@ class RetryStrategy(ActiveStateStrategy):
             strat.on_exit()
 
     def run(self, screenshot: Image.Image):
+        os.makedirs("screenshots", exist_ok=True)
+        filename = f"screenshots/screenshot_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+        cv2.imwrite(filename, screenshot)
         retry = find_button_center(screenshot, self.retry_button_template, button_name="gameplay", threshold=0.6)
         if retry:
             MouseController.touch_position(retry[0], retry[1])

@@ -10,7 +10,7 @@ import cv2
 import numpy as np
 
 import MouseController
-from MouseController import get_mouse_controller
+from MouseController import get_mouse_controller, touch_position
 from TemporalValueNormalizer import TemporalValueNormalizer
 from debug_draw_manager import debug_draw_manager
 from debug_logging_manager import get_debug_logger
@@ -33,6 +33,8 @@ class UpgradeSearcherStrategy(SubStrategy):
     defense_upgrade_template = load_image_from_path("ui_templates/defense_upgrades.png")
     utility_upgrade_template = load_image_from_path("ui_templates/utility_upgrades.png")
 
+    demon_mode_template = load_image_from_path("ui_templates/demon_mode_button.png")
+
     result_lock = threading.Lock()
     resource_lock = threading.Lock()
 
@@ -47,10 +49,10 @@ class UpgradeSearcherStrategy(SubStrategy):
         "RAPIDCHANCEFIRE", "DAMAGETHORN", "LANDDAMAGEMINE", "LANDCHANCEMINE",
         "LANDNINECHANCE", "RAPIDDURATIONFIRE", "LANDRADIUSMINE",  "COINSJAVE",
         "LANDNINERADIUS", "LANDNINEDAMAGE", "NAXRECOVERY", "COINSKCILLBONUS",
-        "INTERESTJAVE", "CASHBONUS", "CASHLAVE", "RECOVERYMAX", "DEFENSE00",
-        "COINSBONUSKILL", "SHOCKIAVESIZE", "BOUNCESHOTCHANCE", "ATTACKUPGRADEFREE",
-        "PACKAGECHANCE", "NULTISHOTCHANCE", "NULTISHOTTARGETS", "NHULTISHOTTARGETS",
-        "BOUNCESHOTTARGETS","AOSOLUTE", "KEGEN", "DEFENSEOO", "RORCE", "FORCE", "None",
+        "INTERESTJAVE", "CASHLAVE", "RECOVERYMAX", "DEFENSE00",
+        "COINSBONUSKILL", "SHOCKIAVESIZE", "ATTACKUPGRADEFREE",
+        "NULTISHOTCHANCE", "NULTISHOTTARGETS", "NHULTISHOTTARGETS",
+        "AOSOLUTE", "KEGEN", "DEFENSEOO", "RORCE", "FORCE", "None",
         "SHECKWZVESIZE", "SHECKWZVEFREQUENCY", "SHOCKWAVEFREQUETCY", "SHECKWAVESIZE", "INTERESTWEAVE",
         "FREEUTILITYUPGRZDE" "TCRITICALFACTOR", "IVAXRECOVERY", "HEAITH", "ABSOLUTE" "MMAXRECOVERY",
         "DEFENSEABSOIUTE", "ABSOLUTE", "SHOCKIVAVE"
@@ -58,7 +60,7 @@ class UpgradeSearcherStrategy(SubStrategy):
 
     # Normalized target names for fuzzy matching
     normalized_upgrade_names = [
-        "DAMAGE", "ATTACKSPEED", "CRITICALCHANCE", "CRITICALFACTOR", "RANGE", "DAMAGEPERMETER",
+        "DAMAGE", "ATTACKSPEED", "CRITICALCHANCE", "CRITICALFACTOR", "RANGE",
         "MULTISHOTCHANCE", "MULTISHOTTARGETS", "RAPIDFIRECHANCE", "RAPIDFIREDURATION", "BOUNCESHOTCHANCE",
         "BOUNCESHOTTARGETS", "BOUNCESHOTRANGE", "SUPERCRITCHANCE", "SUPERCRITMULT", "RENDARMORCHANCE",
         "RENDARMORMULT", "HEALTH", "HEALTHREGEN", "DEFENSE", "DEFENSEABSOLUTE", "THORNDAMAGE", "LIFESTEAL",
@@ -69,6 +71,8 @@ class UpgradeSearcherStrategy(SubStrategy):
         "ENEMYATTACKLEVELSKIP", "ENEMYHEALTHLEVELSKIP"
     ]
 
+
+    ignored_upgrades = ["DEFENSEABSOLUTE","HEALTHREGEN", "LANDMINECHANCE", "LANDMINEDAMAGE", "LANDMINERADIUS", "DAMAGEPERMETER",]
     current_resources_detected = ("", "", "")
 
     cash_value_normalizer = TemporalValueNormalizer(max_age=5.0)
@@ -85,8 +89,10 @@ class UpgradeSearcherStrategy(SubStrategy):
         self.upgrade_thread = threading.Thread(target=self.upgrade_detection_worker, daemon=True).start()
         self.resource_thread = threading.Thread(target=self.resource_detection_worker, daemon=True).start()
         self.menu_upgrade_lockout_timer = time.time() + 2.0
-
+        self.demon_mode_timer = time.time()
+        self.demon_mode_flag = True
         self.scroll_timer = time.time()
+        self.upgrade_hunt_interrupt_timer = time.time()
         self.scroll_count = 0
         self.swap_menu_flag = False
         self.delay_timer_started_at = 0
@@ -101,9 +107,13 @@ class UpgradeSearcherStrategy(SubStrategy):
         self._stop_threads.clear()
         self.scroll_count = 0
         self.tracked_upgrades = {}
-        self.delay_timer_started_at = 0
+        self.delay_timer_started_at = time.time()
         self.delayed_upgrade_check_pending = False
         self.wander_timer = time.time()
+
+        self.demon_mode_timer = time.time()
+        self.demon_mode_flag = True
+
 
 
     def on_exit(self):
@@ -131,7 +141,7 @@ class UpgradeSearcherStrategy(SubStrategy):
         lowest_cost = float("inf")
         for k, v in self.tracked_upgrades.items():
             cost_val = v[1]
-            if cost_val is None or cost_val == "MAX":
+            if cost_val is None or cost_val == "MAX" or k in self.ignored_upgrades:
                 continue
             try:
                 cost_float = float(cost_val)
@@ -144,6 +154,8 @@ class UpgradeSearcherStrategy(SubStrategy):
                 get_debug_logger().log_with_spinner_until(f"Invalid cost value for {k}: {cost_val}")
 
         dlm.lowest_cost_upgrade = self.lowest_known_cost_item
+        dlm.demon_mode_flag = self.demon_mode_flag
+        dlm.demon_mode_timer = self.demon_mode_timer
 
         prev_menu = self.current_menu
         # detect menu state
@@ -160,17 +172,24 @@ class UpgradeSearcherStrategy(SubStrategy):
         if utility_menu:
             self.current_menu = Menu.UTILITY
 
+        if prev_menu != self.current_menu:
+            self.menu_upgrade_lockout_timer = time.time()
+
+        if time.time() - self.menu_upgrade_lockout_timer > 1.0:
+            self.update_visible_upgrades()
+        else:
+            self.clear_visible_upgrades()
+
         dlm.current_upgrade_menu = self.current_menu
         dlm.current_upgrades_detected = self.latest_upgrades_detected
         dlm.tracked_upgrades = self.tracked_upgrades
 
-        if prev_menu != self.current_menu:
-            self.menu_upgrade_lockout_timer = time.time()
+        if time.time() - self.demon_mode_timer > 389 and self.demon_mode_flag:
+            demon_mode = find_button_center(screenshot, self.demon_mode_template, button_name="demon mode")
+            if demon_mode:
+                self.demon_mode_flag = False
+                touch_position(*demon_mode)
 
-        if time.time() - self.menu_upgrade_lockout_timer > 0.7:
-            self.update_visible_upgrades()
-        else:
-            self.clear_visible_upgrades()
 
         with self.result_lock:
             if len(self.latest_upgrades_detected) == 0:
@@ -199,10 +218,10 @@ class UpgradeSearcherStrategy(SubStrategy):
                     if not self.delayed_upgrade_check_pending:
                         self.delay_timer_started_at = time.time()
                         self.delayed_upgrade_check_pending = True
-                    elif time.time() - self.delay_timer_started_at >= 0.25:
+                    elif time.time() - self.delay_timer_started_at >= 0.2:
                         # After half a second, re-check its presence
                         if matched_upgrade:
-                            self.delay_timer_started_at = time.time() - 0.3 #hopefully stop the spam? or maybe this is fine..
+                            self.delay_timer_started_at = time.time() #hopefully stop the spam? or maybe this is fine..
                             MouseController.touch_position(matched_upgrade[3][0],matched_upgrade[3][1])
                             return ## exit to prevent scrolling or something
                         else:
@@ -210,26 +229,38 @@ class UpgradeSearcherStrategy(SubStrategy):
                 else:
                     self.delayed_upgrade_check_pending = False
 
-        # Movement logic proceeds as normal after delay
-        if time.time() - self.scroll_timer > 2.5 and self.scroll_count < 6:
-            self.scroll_down()
-            self.scroll_timer = time.time()
-            self.scroll_count += 1
-        elif time.time() - self.scroll_timer > 2.5 and self.scroll_count >= 6:
-            self.scroll_up()
-            self.scroll_count = 0
-            self.scroll_timer = time.time()
-            self.swap_menu_flag = True
 
-        if time.time() - self.wander_timer < 100:
-            if time.time() - self.scroll_timer > 2 and self.swap_menu_flag:
+        # Movement logic proceeds as normal after delay
+        if not self.swap_menu_flag:
+            if time.time() - self.scroll_timer > 2 and self.scroll_count < 6:
+                self.scroll_down()
+                self.scroll_timer = time.time()
+                self.scroll_count += 1
+            elif time.time() - self.scroll_timer > 2 and self.scroll_count >= 6:
+                self.scroll_up()
+                self.scroll_count = 0
+                self.swap_menu_flag = True
+                self.scroll_timer = time.time()
+
+        if time.time() - self.wander_timer < 80:
+            if self.swap_menu_flag and time.time() - self.scroll_timer > 2:
                 self.swap_menu_flag = False
                 self.switch_menus()
+                self.menu_upgrade_lockout_timer = time.time()
+                self.scroll_timer = time.time()
         else:
             if time.time() - self.scroll_timer > 2 and self.swap_menu_flag:
                 self.swap_menu_flag = False
                 self.switch_menu_to(self.tracked_upgrades[self.lowest_known_cost_item][2])
-                self.scroll_timer = time.time() # give it a little pause so it can see the stuff at the top of the list
+                self.menu_upgrade_lockout_timer = time.time()
+                self.scroll_timer = time.time()
+            elif time.time() - self.upgrade_hunt_interrupt_timer > 1 and self.tracked_upgrades[self.lowest_known_cost_item][2] != self.current_menu and not self.swap_menu_flag:
+                self.scroll_count = 0
+                self.scroll_up()
+                self.swap_menu_flag = True
+                self.menu_upgrade_lockout_timer = time.time()
+                self.upgrade_hunt_interrupt_timer = time.time()
+
 
 
     def upgrade_detection_worker(self):
@@ -315,12 +346,12 @@ class UpgradeSearcherStrategy(SubStrategy):
         #new resolution, each upgrade tile is 88pixels tall
         h, w = self.screenshot.shape[:2]
         #MouseController.swipe(w//2, int(h * .8), w//2, int(h * .8) - 88, 1100)
-        MouseController.drag(w//2, int(h * .85), w//2, int(h * .85) - 93, 800)
+        MouseController.drag(w//2, int(h * .85), w//2, int(h * .85) - 105, 800)
 
     def scroll_up(self):
         # new resolution, each upgrade tile is 88pixels tall
         h, w = self.screenshot.shape[:2]
-        MouseController.swipe(w // 2, int(h * .72), w // 2, int(h * .75) + 230, 300)
+        MouseController.swipe(w // 2, int(h * .72), w // 2, int(h * .75) + 240, 300)
 
 
     def match_upgrade_name(self, ocr_string: str, cutoff=0.8) -> str | None:
